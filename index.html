@@ -4,6 +4,20 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
 <title>Étal</title>
+<meta name="description" content="Le quartier, dans votre poche." />
+
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#6C5CE7" />
+
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32" />
+<link rel="icon" href="icons/icon-192.png" sizes="192x192" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Étal" />
+<meta name="mobile-web-app-capable" content="yes" />
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
@@ -4877,12 +4891,25 @@ function ManageShop({ shop, stats, posts, ratings, onBack, onUpdateShop, onPubli
 function AdminPanel({ shops, accountUsernames, accountsCount, postsCount, reports, onDeleteShop, onApproveShop, onDismissReports, onDeleteAccount, currentUsername, onClose }) {
   const [section, setSection] = useState("shops");
   const [confirmTarget, setConfirmTarget] = useState(null);
+  const [adminSearch, setAdminSearch] = useState("");
   const pendingShops = shops.filter((s) => !isShopVisible(s));
   const sortedShops = [...shops].sort((a, b) => {
     const ra = (reports[a.id] || []).length;
     const rb = (reports[b.id] || []).length;
     return rb - ra;
   });
+  const searchQuery = adminSearch.trim().toLowerCase();
+  const filteredAccountUsernames = searchQuery
+    ? accountUsernames.filter((u) => u.toLowerCase().includes(searchQuery))
+    : accountUsernames;
+  const filteredShops = searchQuery
+    ? sortedShops.filter(
+        (s) =>
+          s.name.toLowerCase().includes(searchQuery) ||
+          s.ownerUsername.toLowerCase().includes(searchQuery) ||
+          (s.city || "").toLowerCase().includes(searchQuery)
+      )
+    : sortedShops;
   return (
     <div className="chat-picker-overlay" onClick={onClose}>
       <div className="chat-picker-sheet" onClick={(e) => e.stopPropagation()}>
@@ -4916,9 +4943,20 @@ function AdminPanel({ shops, accountUsernames, accountsCount, postsCount, report
           </button>
         </nav>
 
+        <input
+          className="pill-input admin-search-input"
+          placeholder={section === "accounts" ? "🔍  Rechercher un identifiant…" : "🔍  Rechercher un commerce, une ville, un propriétaire…"}
+          value={adminSearch}
+          onChange={(e) => setAdminSearch(e.target.value)}
+        />
+
+        {section === "accounts" && filteredAccountUsernames.length === 0 && (
+          <EmptyState title="Aucun compte ne correspond à cette recherche." sub="" />
+        )}
+
         {section === "accounts" && (
           <ul className="shop-list">
-            {accountUsernames.map((username) => (
+            {filteredAccountUsernames.map((username) => (
               <li key={username} className="shop-card">
                 <div className="shop-mark" style={{ background: "var(--indigo)" }}>
                   {username.slice(0, 1).toUpperCase()}
@@ -4972,11 +5010,14 @@ function AdminPanel({ shops, accountUsernames, accountsCount, postsCount, report
         {section === "shops" && (
           <>
             <p className="rate-label">Tous les commerces</p>
-            {sortedShops.length === 0 ? (
-              <EmptyState title="Aucun commerce pour l'instant." sub="" />
+            {filteredShops.length === 0 ? (
+              <EmptyState
+                title={searchQuery ? "Aucun commerce ne correspond à cette recherche." : "Aucun commerce pour l'instant."}
+                sub=""
+              />
             ) : (
               <ul className="shop-list">
-            {sortedShops.map((shop) => {
+            {filteredShops.map((shop) => {
               const shopReports = reports[shop.id] || [];
               return (
                 <li key={shop.id} className="shop-card">
@@ -6092,6 +6133,7 @@ function Shell({ children, dark }) {
         }
         .chip.active { background: var(--indigo); border-color: var(--indigo); color: #fff; }
         .pill-input { margin-bottom: 16px; }
+        .admin-search-input { margin-top: 14px; }
         .search-bar-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
         .search-bar-input { flex: 1; margin-bottom: 0; }
         .search-bar-input.compact { flex: 0 1 110px; min-width: 90px; padding-left: 10px; }
