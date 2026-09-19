@@ -2010,7 +2010,7 @@ function EtalApp() {
     setFaceIdError("");
     loginWithFaceId(username).then((ok) => {
       if (!ok) {
-        setFaceIdError("Échec de la vérification Face ID / Touch ID.");
+        setFaceIdError("Échec de la vérification biométrique.");
         return;
       }
       const key = normKey(username);
@@ -2025,8 +2025,8 @@ function EtalApp() {
 
   function handleEnableFaceId(username) {
     return registerFaceId(username)
-      .then(() => ({ ok: true, message: "Face ID / Touch ID activé sur cet appareil." }))
-      .catch(() => ({ ok: false, message: "Impossible d'activer Face ID / Touch ID sur cet appareil." }));
+      .then(() => ({ ok: true, message: "Connexion biométrique activée sur cet appareil." }))
+      .catch(() => ({ ok: false, message: "Impossible d'activer la connexion biométrique sur cet appareil." }));
   }
 
   useEffect(() => {
@@ -3013,7 +3013,7 @@ function EtalApp() {
               />
               <button
                 type="button"
-                className="icon-btn"
+                className="icon-btn geoloc-btn"
                 onClick={() => {
                   if (userLocation) {
                     setUserLocation(null);
@@ -5233,7 +5233,7 @@ function ProfileScreen({ me, loyaltyCards, loyaltyData, followedShops, ratedShop
                     if (faceIdOn) {
                       onDisableFaceId();
                       setFaceIdOn(false);
-                      setFaceIdMsg("Face ID / Touch ID désactivé sur cet appareil.");
+                      setFaceIdMsg("Connexion biométrique désactivée sur cet appareil.");
                     } else {
                       const res = await onEnableFaceId();
                       if (res && res.ok) setFaceIdOn(true);
@@ -5241,7 +5241,7 @@ function ProfileScreen({ me, loyaltyCards, loyaltyData, followedShops, ratedShop
                     }
                   }}
                 >
-                  🔓 {faceIdOn ? "Désactiver Face ID / Touch ID" : "Activer Face ID / Touch ID sur cet appareil"}
+                  🔓 {faceIdOn ? "Désactiver la connexion biométrique" : "Activer la connexion biométrique sur cet appareil"}
                 </button>
               )}
               {faceIdMsg && <p className="loyalty-hint">{faceIdMsg}</p>}
@@ -5629,9 +5629,9 @@ function LoginScreen({ pseudoInput, setPseudoInput, passwordInput, setPasswordIn
         </div>
         <h1>Vos commerçants préférés, jamais loin.</h1>
         <p className="lede">
-          Étal réunit les commerçants et artisans de votre quartier au même endroit :
-          suivez ceux que vous aimez, discutez avec eux, et ne manquez plus jamais
-          une bonne occasion.
+          Étal est le grand outil des commerçants et de leurs clients : un seul endroit
+          pour découvrir les commerces du quartier, les suivre, cumuler des récompenses
+          et donner son avis directement à celles et ceux qui font vivre votre quartier.
         </p>
         <ul className="value-props">
           <li>
@@ -5644,11 +5644,11 @@ function LoginScreen({ pseudoInput, setPseudoInput, passwordInput, setPasswordIn
           </li>
           <li>
             <span className="vp-icon">🎁</span>
-            <span>Cumulez des récompenses de fidélité, commerce après commerce</span>
+            <span>Cumulez des récompenses de fidélité chez les commerces qui en proposent</span>
           </li>
           <li>
-            <span className="vp-icon">💬</span>
-            <span>Posez vos questions directement, avec des réponses immédiates</span>
+            <span className="vp-icon">⭐</span>
+            <span>Laissez un avis — le commerçant peut vous répondre directement</span>
           </li>
         </ul>
         {!isSignup && faceIdSupported && faceIdUsers && faceIdUsers.length > 0 && (
@@ -5660,7 +5660,7 @@ function LoginScreen({ pseudoInput, setPseudoInput, passwordInput, setPasswordIn
                 className="cta-btn faceid-btn"
                 onClick={() => onFaceIdLogin(u)}
               >
-                🔓 Se connecter avec Face ID / Touch ID ({u})
+                🔓 Connexion rapide par empreinte/visage ({u})
               </button>
             ))}
             {faceIdError && <p className="field-error">{faceIdError}</p>}
@@ -6014,6 +6014,7 @@ function Shell({ children, dark }) {
           background: var(--card); border: 2px solid var(--line); color: var(--ink-soft);
           width: 36px; height: 36px; border-radius: 12px; cursor: pointer; font-size: 15px;
         }
+        .geoloc-btn { width: 46px; height: 46px; border-radius: 14px; font-size: 20px; }
 
         section, .shop-header-bar, .subtabs, .compose-box, .review-list, .rate-box { padding-left: 20px; padding-right: 20px; }
         section { padding-top: 14px; }
@@ -6070,8 +6071,8 @@ function Shell({ children, dark }) {
         .photo-card .stars .star.filled { color: var(--amber); }
         .photo-card .shop-mark { box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
         .shop-mark {
-          width: 44px; height: 44px; flex: none; display: flex; align-items: center; justify-content: center;
-          font-size: 20px; border-radius: 14px; color: #fff;
+          width: 52px; height: 52px; flex: none; display: flex; align-items: center; justify-content: center;
+          font-size: 24px; border-radius: 15px; color: #fff;
         }
         .shop-mark.large { width: 60px; height: 60px; font-size: 30px; border-radius: 18px; background: rgba(255,255,255,0.25); }
         .shop-row-body { flex: 1; min-width: 0; }
