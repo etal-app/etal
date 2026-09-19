@@ -8,6 +8,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>html,body,#root{height:100%;margin:0;padding:0;}</style>
 </head>
 <body>
@@ -2291,6 +2293,104 @@ function EtalApp() {
     setPseudoInput("");
   }
 
+  function changePassword(currentPassword, newPassword) {
+    const account = data.accounts?.[me] || {};
+    return hashPassword(currentPassword).then((currentHash) => {
+      if (account.passwordHash !== currentHash) {
+        return { ok: false, message: "Mot de passe actuel incorrect." };
+      }
+      if (!newPassword || newPassword.length < 4) {
+        return { ok: false, message: "Le nouveau mot de passe doit faire au moins 4 caractères." };
+      }
+      return hashPassword(newPassword).then((newHash) => {
+        persist({ ...data, accounts: { ...data.accounts, [me]: { ...account, passwordHash: newHash } } });
+        return { ok: true, message: "Mot de passe mis à jour." };
+      });
+    });
+  }
+
+  function renameUsername(newUsernameRaw) {
+    const newKey = normKey(newUsernameRaw || "");
+    if (!newKey) return Promise.resolve({ ok: false, message: "Choisissez un identifiant." });
+    if (newKey === me) return Promise.resolve({ ok: false, message: "C'est déjà votre identifiant actuel." });
+    if (data.accounts?.[newKey]) return Promise.resolve({ ok: false, message: "Cet identifiant est déjà pris." });
+
+    const oldKey = me;
+    const account = data.accounts[oldKey];
+    const nextAccounts = { ...data.accounts };
+    delete nextAccounts[oldKey];
+    nextAccounts[newKey] = account;
+
+    const nextShops = {};
+    Object.entries(data.shops || {}).forEach(([id, shop]) => {
+      nextShops[id] = shop.ownerUsername === oldKey ? { ...shop, ownerUsername: newKey } : shop;
+    });
+
+    function migrateKeyedByUsername(obj) {
+      if (!obj || !obj[oldKey]) return obj;
+      const next = { ...obj };
+      next[newKey] = next[oldKey];
+      delete next[oldKey];
+      return next;
+    }
+
+    const nextFollows = migrateKeyedByUsername(data.follows);
+    const nextMuted = migrateKeyedByUsername(data.muted);
+    const nextLastSeen = migrateKeyedByUsername(data.lastSeen);
+
+    const nextRatings = {};
+    Object.entries(data.ratings || {}).forEach(([shopId, byUser]) => {
+      nextRatings[shopId] = migrateKeyedByUsername(byUser);
+    });
+    const nextLoyalty = {};
+    Object.entries(data.loyalty || {}).forEach(([shopId, byUser]) => {
+      nextLoyalty[shopId] = migrateKeyedByUsername(byUser);
+    });
+
+    const nextReports = {};
+    Object.entries(data.reports || {}).forEach(([shopId, list]) => {
+      nextReports[shopId] = (list || []).map((r) => (r.by === oldKey ? { ...r, by: newKey } : r));
+    });
+
+    persist({
+      ...data,
+      accounts: nextAccounts,
+      shops: nextShops,
+      follows: nextFollows,
+      muted: nextMuted,
+      lastSeen: nextLastSeen,
+      ratings: nextRatings,
+      loyalty: nextLoyalty,
+      reports: nextReports,
+    });
+
+    // Migre aussi l'enregistrement Face ID local, propre à cet appareil.
+    const oldFaceId = localStorage.getItem(faceIdStorageKey(oldKey));
+    if (oldFaceId) {
+      localStorage.setItem(faceIdStorageKey(newKey), oldFaceId);
+      localStorage.removeItem(faceIdStorageKey(oldKey));
+    }
+
+    setMe(newKey);
+    return Promise.resolve({ ok: true, message: `Identifiant changé pour "${newKey}".` });
+  }
+
+  function cancelSubscription() {
+    const owned = Object.values(data.shops || {}).filter((s) => s.ownerUsername === me && s.plan && s.plan !== "free");
+    if (owned.length === 0) {
+      return { ok: false, message: "Aucun abonnement payant actif pour l'instant." };
+    }
+    const nextShops = { ...data.shops };
+    owned.forEach((s) => {
+      nextShops[s.id] = { ...s, plan: "free" };
+    });
+    persist({ ...data, shops: nextShops });
+    return {
+      ok: true,
+      message: `Abonnement résilié pour ${owned.length} commerce${owned.length > 1 ? "s" : ""} — retour à l'offre Gratuite.`,
+    };
+  }
+
   function reportShop(shopId, reason) {
     const list = data.reports[shopId] || [];
     persist({
@@ -2876,10 +2976,28 @@ function EtalApp() {
                 </div>
               </div>
             )}
+            <div className="emoji-quickpicks">
+              {CATEGORIES.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={filterCat === c.id ? "emoji-pick active" : "emoji-pick"}
+                  title={c.label}
+                  onClick={() => {
+                    setFilterCat(c.id);
+                    if (!filterCity.trim() && searchInputRef.current) {
+                      searchInputRef.current.focus();
+                    }
+                  }}
+                >
+                  {c.emoji}
+                </button>
+              ))}
+            </div>
             <div className="search-bar-row">
               <input
                 ref={searchInputRef}
-                className="pill-input search-bar-input compact"
+                className="pill-input search-bar-input"
                 placeholder="🔍  Ville / métier"
                 value={filterCity}
                 onChange={(e) => {
@@ -2893,24 +3011,6 @@ function EtalApp() {
                   }
                 }}
               />
-              <div className="emoji-quickpicks">
-                {CATEGORIES.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className={filterCat === c.id ? "emoji-pick active" : "emoji-pick"}
-                    title={c.label}
-                    onClick={() => {
-                      setFilterCat(c.id);
-                      if (!filterCity.trim() && searchInputRef.current) {
-                        searchInputRef.current.focus();
-                      }
-                    }}
-                  >
-                    {c.emoji}
-                  </button>
-                ))}
-              </div>
               <button
                 type="button"
                 className="icon-btn"
@@ -3219,6 +3319,10 @@ function EtalApp() {
             onDeleteAccount={deleteAccount}
             profilePhoto={data.accounts?.[me]?.profilePhoto || ""}
             onUpdateProfilePhoto={updateProfilePhoto}
+            onChangePassword={changePassword}
+            onRenameUsername={renameUsername}
+            onCancelSubscription={cancelSubscription}
+            hasPaidPlan={myShops.some((s) => s.plan && s.plan !== "free")}
             faceIdSupported={faceIdSupported}
             faceIdEnabled={faceIdRegisteredUsernames().includes(me)}
             onEnableFaceId={() => handleEnableFaceId(me)}
@@ -3636,37 +3740,97 @@ function ShopDetail({ shop, stats, posts, isFollowing, onToggleFollow, onBack, m
   );
 }
 
-function computeMapPositions(shops, userLocation) {
-  const points = shops.filter((s) => s.lat && s.lng);
-  if (points.length === 0) return { points: [], userPos: null };
-  const lats = points.map((s) => s.lat);
-  const lngs = points.map((s) => s.lng);
-  if (userLocation) {
-    lats.push(userLocation.lat);
-    lngs.push(userLocation.lng);
-  }
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-  const latSpan = Math.max(maxLat - minLat, 0.01);
-  const lngSpan = Math.max(maxLng - minLng, 0.01);
-  function pos(lat, lng) {
-    return {
-      xPct: ((lng - minLng) / lngSpan) * 80 + 10,
-      yPct: (1 - (lat - minLat) / latSpan) * 80 + 10,
-    };
-  }
-  return {
-    points: points.map((s) => ({ shop: s, ...pos(s.lat, s.lng) })),
-    userPos: userLocation ? pos(userLocation.lat, userLocation.lng) : null,
-  };
-}
+// Centre de la France par défaut, tant qu'on n'a ni position ni commerce localisé.
+const DEFAULT_MAP_CENTER = [46.6034, 1.8883];
 
 function ShopsMapView({ shops, userLocation, onOpenShop }) {
-  const { points, userPos } = computeMapPositions(shops, userLocation);
-  const missing = shops.length - points.length;
-  if (points.length === 0) {
+  const mapDivRef = useRef(null);
+  const mapRef = useRef(null);
+  const markersRef = useRef([]);
+  const userMarkerRef = useRef(null);
+  const initedRef = useRef(false);
+  const [libReady, setLibReady] = useState(typeof window !== "undefined" && !!window.L);
+
+  const located = shops.filter((s) => typeof s.lat === "number" && typeof s.lng === "number");
+  const missing = shops.length - located.length;
+
+  // La librairie de carte (Leaflet) se charge depuis une CDN — on attend
+  // qu'elle soit prête si la page vient tout juste de s'ouvrir.
+  useEffect(() => {
+    if (libReady) return;
+    const id = setInterval(() => {
+      if (typeof window !== "undefined" && window.L) {
+        setLibReady(true);
+        clearInterval(id);
+      }
+    }, 150);
+    return () => clearInterval(id);
+  }, [libReady]);
+
+  // Création de la vraie carte interactive (une seule fois).
+  useEffect(() => {
+    if (!libReady || !mapDivRef.current || initedRef.current) return;
+    initedRef.current = true;
+    const center = userLocation
+      ? [userLocation.lat, userLocation.lng]
+      : located[0]
+      ? [located[0].lat, located[0].lng]
+      : DEFAULT_MAP_CENTER;
+    const zoom = userLocation || located.length ? 13 : 5;
+    const map = window.L.map(mapDivRef.current, { zoomControl: true }).setView(center, zoom);
+    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(map);
+    mapRef.current = map;
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      initedRef.current = false;
+    };
+  }, [libReady]);
+
+  // Mise à jour des marqueurs commerces à chaque changement de liste.
+  useEffect(() => {
+    if (!mapRef.current || !window.L) return;
+    markersRef.current.forEach((m) => mapRef.current.removeLayer(m));
+    markersRef.current = located.map((s) => {
+      const icon = window.L.divIcon({
+        className: "map-pin-icon",
+        html: `<span class="map-pin-emoji" style="background:${categoryOf(s.category).grad}">${categoryOf(s.category).emoji}</span>`,
+        iconSize: [34, 34],
+        iconAnchor: [17, 17],
+      });
+      const marker = window.L.marker([s.lat, s.lng], { icon }).addTo(mapRef.current);
+      marker.bindTooltip(s.name, { direction: "top" });
+      marker.on("click", () => onOpenShop(s));
+      return marker;
+    });
+  }, [located, libReady]);
+
+  // Marqueur "vous êtes ici" + recentrage quand la localisation change.
+  useEffect(() => {
+    if (!mapRef.current || !window.L) return;
+    if (userMarkerRef.current) {
+      mapRef.current.removeLayer(userMarkerRef.current);
+      userMarkerRef.current = null;
+    }
+    if (userLocation) {
+      const userIcon = window.L.divIcon({
+        className: "map-pin-icon",
+        html: `<span class="map-pin-emoji user-map-pin">📍</span>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
+      });
+      userMarkerRef.current = window.L.marker([userLocation.lat, userLocation.lng], { icon: userIcon }).addTo(mapRef.current);
+      mapRef.current.setView([userLocation.lat, userLocation.lng], 13);
+    }
+  }, [userLocation, libReady]);
+
+  if (!libReady) {
+    return <EmptyState title="Chargement de la carte…" sub="Un instant." />;
+  }
+  if (located.length === 0 && !userLocation) {
     return (
       <EmptyState
         title="Aucun commerce localisé pour l'instant."
@@ -3674,28 +3838,10 @@ function ShopsMapView({ shops, userLocation, onOpenShop }) {
       />
     );
   }
+
   return (
     <>
-      <div className="map-canvas">
-        <div className="map-grid" />
-        {userPos && (
-          <div className="map-pin user-pin" style={{ left: `${userPos.xPct}%`, top: `${userPos.yPct}%` }} title="Vous êtes ici">
-            📍
-          </div>
-        )}
-        {points.map(({ shop, xPct, yPct }) => (
-          <button
-            key={shop.id}
-            type="button"
-            className="map-pin shop-pin"
-            style={{ left: `${xPct}%`, top: `${yPct}%`, background: categoryOf(shop.category).grad }}
-            onClick={() => onOpenShop(shop)}
-            title={shop.name}
-          >
-            {categoryOf(shop.category).emoji}
-          </button>
-        ))}
-      </div>
+      <div ref={mapDivRef} className="leaflet-map-canvas" />
       {missing > 0 && (
         <p className="loyalty-hint">
           {missing} commerce{missing > 1 ? "s" : ""} non localisé{missing > 1 ? "s" : ""}, absent{missing > 1 ? "s" : ""} de la carte.
@@ -4843,7 +4989,7 @@ function AdminPanel({ shops, accountUsernames, accountsCount, postsCount, report
   );
 }
 
-function ProfileScreen({ me, loyaltyCards, loyaltyData, followedShops, ratedShops, ratings, onOpenShop, visitHistory, mutedData, onSetMuteLevel, isDark, onToggleDarkMode, isAdmin, onUnlockAdmin, onOpenAdmin, reportsCount, onDeleteAccount, onLogout, profilePhoto, onUpdateProfilePhoto, faceIdSupported, faceIdEnabled, onEnableFaceId, onDisableFaceId }) {
+function ProfileScreen({ me, loyaltyCards, loyaltyData, followedShops, ratedShops, ratings, onOpenShop, visitHistory, mutedData, onSetMuteLevel, isDark, onToggleDarkMode, isAdmin, onUnlockAdmin, onOpenAdmin, reportsCount, onDeleteAccount, onLogout, profilePhoto, onUpdateProfilePhoto, onChangePassword, onRenameUsername, onCancelSubscription, hasPaidPlan, faceIdSupported, faceIdEnabled, onEnableFaceId, onDisableFaceId }) {
   const [adminKeyInput, setAdminKeyInput] = useState("");
   const [adminMsg, setAdminMsg] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -4851,6 +4997,16 @@ function ProfileScreen({ me, loyaltyCards, loyaltyData, followedShops, ratedShop
   const [faceIdMsg, setFaceIdMsg] = useState("");
   const [faceIdOn, setFaceIdOn] = useState(faceIdEnabled);
   const [photoLoading, setPhotoLoading] = useState(false);
+  const [showUsernameForm, setShowUsernameForm] = useState(false);
+  const [newUsername, setNewUsername] = useState("");
+  const [usernameMsg, setUsernameMsg] = useState("");
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [currentPasswordInput, setCurrentPasswordInput] = useState("");
+  const [newPasswordInput, setNewPasswordInput] = useState("");
+  const [confirmNewPasswordInput, setConfirmNewPasswordInput] = useState("");
+  const [passwordMsg, setPasswordMsg] = useState("");
+  const [subMsg, setSubMsg] = useState("");
+  const [confirmCancelSub, setConfirmCancelSub] = useState(false);
 
   async function handlePhotoChange(e) {
     const file = e.target.files && e.target.files[0];
@@ -4908,6 +5064,131 @@ function ProfileScreen({ me, loyaltyCards, loyaltyData, followedShops, ratedShop
               <button className="settings-row" onClick={onToggleDarkMode}>
                 {isDark ? "☀️ Mode clair" : "🌙 Mode sombre"}
               </button>
+
+              <button
+                type="button"
+                className="settings-row"
+                onClick={() => {
+                  setUsernameMsg("");
+                  setNewUsername("");
+                  setShowUsernameForm((v) => !v);
+                }}
+              >
+                🪪 Changer d'identifiant
+              </button>
+              {showUsernameForm && (
+                <div className="admin-unlock" style={{ flexDirection: "column", alignItems: "stretch" }}>
+                  <input
+                    placeholder="Nouvel identifiant"
+                    value={newUsername}
+                    onChange={(e) => setNewUsername(e.target.value)}
+                  />
+                  <button
+                    className="secondary-btn small"
+                    onClick={async () => {
+                      const res = await onRenameUsername(newUsername);
+                      setUsernameMsg(res.message);
+                      if (res.ok) {
+                        setNewUsername("");
+                        setShowUsernameForm(false);
+                      }
+                    }}
+                  >
+                    Valider
+                  </button>
+                  {usernameMsg && <p className="loyalty-hint">{usernameMsg}</p>}
+                </div>
+              )}
+
+              <button
+                type="button"
+                className="settings-row"
+                onClick={() => {
+                  setPasswordMsg("");
+                  setCurrentPasswordInput("");
+                  setNewPasswordInput("");
+                  setConfirmNewPasswordInput("");
+                  setShowPasswordForm((v) => !v);
+                }}
+              >
+                🔑 Modifier le mot de passe
+              </button>
+              {showPasswordForm && (
+                <div className="admin-unlock" style={{ flexDirection: "column", alignItems: "stretch" }}>
+                  <input
+                    type="password"
+                    placeholder="Mot de passe actuel"
+                    value={currentPasswordInput}
+                    onChange={(e) => setCurrentPasswordInput(e.target.value)}
+                  />
+                  <input
+                    type="password"
+                    placeholder="Nouveau mot de passe"
+                    value={newPasswordInput}
+                    onChange={(e) => setNewPasswordInput(e.target.value)}
+                  />
+                  <input
+                    type="password"
+                    placeholder="Confirmer le nouveau mot de passe"
+                    value={confirmNewPasswordInput}
+                    onChange={(e) => setConfirmNewPasswordInput(e.target.value)}
+                  />
+                  <button
+                    className="secondary-btn small"
+                    onClick={async () => {
+                      if (newPasswordInput !== confirmNewPasswordInput) {
+                        setPasswordMsg("Les nouveaux mots de passe ne correspondent pas.");
+                        return;
+                      }
+                      const res = await onChangePassword(currentPasswordInput, newPasswordInput);
+                      setPasswordMsg(res.message);
+                      if (res.ok) {
+                        setCurrentPasswordInput("");
+                        setNewPasswordInput("");
+                        setConfirmNewPasswordInput("");
+                        setShowPasswordForm(false);
+                      }
+                    }}
+                  >
+                    Valider
+                  </button>
+                  {passwordMsg && <p className="loyalty-hint">{passwordMsg}</p>}
+                </div>
+              )}
+
+              {hasPaidPlan && (
+                <>
+                  {!confirmCancelSub ? (
+                    <button type="button" className="settings-row danger" onClick={() => setConfirmCancelSub(true)}>
+                      🚫 Arrêter mon abonnement
+                    </button>
+                  ) : (
+                    <div className="settings-row danger" style={{ flexDirection: "column", alignItems: "stretch", gap: 8, cursor: "default" }}>
+                      <span>
+                        Résilier votre abonnement payant ? Vos commerces repasseront à l'offre Gratuite
+                        (alertes limitées, pas de galerie, pas de placement prioritaire).
+                      </span>
+                      <div className="form-actions">
+                        <button className="secondary-btn small" onClick={() => setConfirmCancelSub(false)}>
+                          Annuler
+                        </button>
+                        <button
+                          className="cta-btn small alert-cta"
+                          onClick={() => {
+                            const res = onCancelSubscription();
+                            setSubMsg(res.message);
+                            setConfirmCancelSub(false);
+                          }}
+                        >
+                          Confirmer
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {subMsg && <p className="loyalty-hint">{subMsg}</p>}
+                </>
+              )}
+
               {isAdmin ? (
                 <button
                   className="settings-row"
@@ -5747,7 +6028,7 @@ function Shell({ children, dark }) {
         .search-bar-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
         .search-bar-input { flex: 1; margin-bottom: 0; }
         .search-bar-input.compact { flex: 0 1 110px; min-width: 90px; padding-left: 10px; }
-        .emoji-quickpicks { display: flex; gap: 6px; overflow-x: auto; flex: 1; padding: 2px; -ms-overflow-style: none; scrollbar-width: none; }
+        .emoji-quickpicks { display: flex; gap: 6px; overflow-x: auto; flex: 1; padding: 2px; margin-bottom: 12px; -ms-overflow-style: none; scrollbar-width: none; }
         .emoji-quickpicks::-webkit-scrollbar { display: none; }
         .emoji-pick {
           flex: none; width: 36px; height: 36px; border-radius: 50%; border: 2px solid var(--line);
@@ -5758,19 +6039,16 @@ function Shell({ children, dark }) {
         .category-picker-btn { display: flex; align-items: center; justify-content: center; }
         .distance-tag { font-size: 11px; font-weight: 700; color: #5643D6; background: #F0EDFF; padding: 2px 8px; border-radius: 999px; }
 
-        .map-canvas { position: relative; width: 100%; padding-bottom: 100%; background: var(--card); border-radius: 20px; overflow: hidden; box-shadow: var(--shadow); margin-bottom: 12px; }
-        .map-grid {
-          position: absolute; inset: 0;
-          background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
-          background-size: 10% 10%; opacity: 0.6;
+        .leaflet-map-canvas {
+          position: relative; width: 100%; height: 60vh; min-height: 360px;
+          background: var(--card); border-radius: 20px; overflow: hidden; box-shadow: var(--shadow); margin-bottom: 12px;
         }
-        .map-pin {
-          position: absolute; transform: translate(-50%, -50%);
-          width: 34px; height: 34px; border-radius: 50%; border: 2px solid #fff;
-          display: flex; align-items: center; justify-content: center; font-size: 16px;
-          box-shadow: 0 2px 8px rgba(20,20,35,0.3); cursor: pointer; padding: 0;
+        .map-pin-emoji {
+          display: flex; align-items: center; justify-content: center;
+          width: 34px; height: 34px; border-radius: 50%;
+          border: 2px solid #fff; font-size: 16px; box-shadow: 0 2px 8px rgba(20,20,35,0.3);
         }
-        .map-pin.user-pin { background: var(--indigo); color: #fff; width: 26px; height: 26px; font-size: 12px; z-index: 5; }
+        .map-pin-emoji.user-map-pin { background: var(--indigo); color: #fff; width: 30px; height: 30px; font-size: 14px; }
 
         .shop-list, .post-list, .review-list { list-style: none; margin: 0; padding: 0; }
         .shop-card {
