@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.js"></script>
 <style>html,body,#root{height:100%;margin:0;padding:0;}</style>
 </head>
 <body>
@@ -179,40 +180,47 @@ const PLANS = {
     alertsPerWeek: 1,
     gallery: false,
     loyalty: false,
-    reviewReply: false,
+    reviewReply: true,
     fullStats: false,
-    trending: false,
-    badge: false,
+    priorityPlacement: false,
+    targetedAlerts: false,
+    multiShop: false,
   },
   pro: {
     id: "pro",
     label: "Pro",
-    price: "19€/mois",
+    price: "12€/mois",
     alertsPerWeek: Infinity,
     gallery: true,
     loyalty: true,
     reviewReply: true,
     fullStats: true,
-    trending: false,
-    badge: false,
+    priorityPlacement: false,
+    targetedAlerts: false,
+    multiShop: false,
   },
   premium: {
     id: "premium",
     label: "Premium",
-    price: "39€/mois",
+    price: "29€/mois",
     alertsPerWeek: Infinity,
     gallery: true,
     loyalty: true,
     reviewReply: true,
     fullStats: true,
-    trending: true,
-    badge: true,
+    priorityPlacement: true,
+    targetedAlerts: true,
+    multiShop: true,
   },
 };
 
 function planOf(shop) {
   return PLANS[shop?.plan] || PLANS.free;
 }
+
+// Rayon dans lequel le placement prioritaire Premium s'applique — au-delà,
+// aucun intérêt pour l'utilisateur donc aucun boost (pas de "tendance nationale").
+const PRIORITY_PLACEMENT_RADIUS_KM = 50;
 
 const PENDING_AUTO_APPROVE_MS = 48 * 60 * 60 * 1000;
 
@@ -1766,6 +1774,82 @@ async function hashPassword(pw) {
   }
 }
 
+// --- Face ID / Touch ID (via WebAuthn) ---------------------------------
+// Utilise le capteur biométrique déjà intégré au téléphone (aucun service
+// externe, aucun coût). Le déverrouillage biométrique est vérifié par le
+// système d'exploitation lui-même ; une fois réussi, on retrouve l'identité
+// du compte à partir de l'identifiant d'accès enregistré sur cet appareil.
+function faceIdStorageKey(username) {
+  return `etal_faceid_${username}`;
+}
+
+async function faceIdAvailable() {
+  try {
+    return !!(
+      window.PublicKeyCredential &&
+      (await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())
+    );
+  } catch (e) {
+    return false;
+  }
+}
+
+function faceIdRegisteredUsernames() {
+  const out = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("etal_faceid_")) out.push(k.replace("etal_faceid_", ""));
+  }
+  return out;
+}
+
+async function registerFaceId(username) {
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const publicKey = {
+    challenge,
+    rp: { name: "Étal" },
+    user: {
+      id: new TextEncoder().encode(username),
+      name: username,
+      displayName: username,
+    },
+    pubKeyCredParams: [
+      { type: "public-key", alg: -7 },
+      { type: "public-key", alg: -257 },
+    ],
+    authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+    timeout: 60000,
+    attestation: "none",
+  };
+  const cred = await navigator.credentials.create({ publicKey });
+  const id = btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
+  localStorage.setItem(faceIdStorageKey(username), id);
+  return true;
+}
+
+function disableFaceId(username) {
+  localStorage.removeItem(faceIdStorageKey(username));
+}
+
+async function loginWithFaceId(username) {
+  const storedId = localStorage.getItem(faceIdStorageKey(username));
+  if (!storedId) return false;
+  const idBytes = Uint8Array.from(atob(storedId), (c) => c.charCodeAt(0));
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const publicKey = {
+    challenge,
+    allowCredentials: [{ id: idBytes, type: "public-key" }],
+    userVerification: "required",
+    timeout: 60000,
+  };
+  try {
+    await navigator.credentials.get({ publicKey });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function resizeImageFile(file, maxDim = 900, quality = 0.72) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1847,11 +1931,12 @@ function EtalApp() {
   const [pendingLoginKey, setPendingLoginKey] = useState(null);
   const [showWelcomeBack, setShowWelcomeBack] = useState(false);
   const [showForgot, setShowForgot] = useState(false);
+  const [faceIdSupported, setFaceIdSupported] = useState(false);
+  const [faceIdError, setFaceIdError] = useState("");
   const [tab, setTab] = useState("discover");
   const [filterCat, setFilterCat] = useState("");
   const [discoverView, setDiscoverView] = useState("list");
   const [openNowOnly, setOpenNowOnly] = useState(false);
-  const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const searchInputRef = useRef(null);
   const [recommendedOnly, setRecommendedOnly] = useState(false);
   const [sortMode, setSortMode] = useState("rating");
@@ -1914,6 +1999,33 @@ function EtalApp() {
     const id = setInterval(loadData, 15000);
     return () => clearInterval(id);
   }, [loadData]);
+
+  useEffect(() => {
+    faceIdAvailable().then(setFaceIdSupported);
+  }, []);
+
+  function handleFaceIdLogin(username) {
+    setFaceIdError("");
+    loginWithFaceId(username).then((ok) => {
+      if (!ok) {
+        setFaceIdError("Échec de la vérification Face ID / Touch ID.");
+        return;
+      }
+      const key = normKey(username);
+      if (!data.accounts?.[key]) {
+        setFaceIdError("Ce compte n'existe plus sur ce serveur.");
+        return;
+      }
+      setPendingLoginKey(key);
+      setShowWelcomeBack(true);
+    });
+  }
+
+  function handleEnableFaceId(username) {
+    return registerFaceId(username)
+      .then(() => ({ ok: true, message: "Face ID / Touch ID activé sur cet appareil." }))
+      .catch(() => ({ ok: false, message: "Impossible d'activer Face ID / Touch ID sur cet appareil." }));
+  }
 
   useEffect(() => {
     if (!me || homeCityApplied.current) return;
@@ -2421,6 +2533,14 @@ function EtalApp() {
     });
   }
 
+  function updateProfilePhoto(dataUrl) {
+    const account = data.accounts?.[me] || {};
+    persist({
+      ...data,
+      accounts: { ...(data.accounts || {}), [me]: { ...account, profilePhoto: dataUrl } },
+    });
+  }
+
   function openShop(shop) {
     setSelectedShop(shop.id);
     const following = (data.follows[me] || []).includes(shop.id);
@@ -2618,6 +2738,10 @@ function EtalApp() {
           shopCount={Object.keys(data.shops).length}
           loginError={loginError}
           onForgotPassword={() => setShowForgot(true)}
+          faceIdSupported={faceIdSupported}
+          faceIdUsers={faceIdRegisteredUsernames()}
+          faceIdError={faceIdError}
+          onFaceIdLogin={handleFaceIdLogin}
         />
       </Shell>
     );
@@ -2660,6 +2784,9 @@ function EtalApp() {
         userLocation && s.lat && s.lng ? distanceKm(userLocation.lat, userLocation.lng, s.lat, s.lng) : null,
     }))
     .sort((a, b) => {
+      const aBoost = planOf(a.shop).priorityPlacement && (a.distanceKm == null || a.distanceKm <= PRIORITY_PLACEMENT_RADIUS_KM);
+      const bBoost = planOf(b.shop).priorityPlacement && (b.distanceKm == null || b.distanceKm <= PRIORITY_PLACEMENT_RADIUS_KM);
+      if (aBoost !== bBoost) return aBoost ? -1 : 1;
       if (sortMode === "distance" && userLocation) {
         if (a.distanceKm == null && b.distanceKm == null) return b.stats.avg - a.stats.avg;
         if (a.distanceKm == null) return 1;
@@ -2800,19 +2927,6 @@ function EtalApp() {
               >
                 {locating ? "…" : userLocation ? "✕" : "📍"}
               </button>
-              <button
-                type="button"
-                className="icon-btn category-picker-btn"
-                onClick={() => setCategoryPickerOpen(true)}
-                title="Filtrer par métier"
-              >
-                <svg width="26" height="20" viewBox="0 0 28 24" fill="none" aria-hidden="true">
-                  <line x1="2" y1="6" x2="16" y2="6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                  <line x1="5" y1="12" x2="13" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                  <line x1="8" y1="18" x2="10" y2="18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                  <path d="M19 9 L23 14 L27 9" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
             </div>
             {filterCat && (
               <div className="chip-row" style={{ marginBottom: 10 }}>
@@ -2822,41 +2936,6 @@ function EtalApp() {
               </div>
             )}
             {locError && <p className="field-error">{locError}</p>}
-            {categoryPickerOpen && (
-              <div className="chat-picker-overlay" onClick={() => setCategoryPickerOpen(false)}>
-                <div className="chat-picker-sheet" onClick={(e) => e.stopPropagation()}>
-                  <div className="chat-picker-head">
-                    <p className="rate-label">Filtrer par métier</p>
-                    <button className="ghost-link" onClick={() => setCategoryPickerOpen(false)}>
-                      Fermer
-                    </button>
-                  </div>
-                  <div className="chip-row wrap">
-                    <button
-                      className={filterCat === "" ? "chip active" : "chip"}
-                      onClick={() => {
-                        setFilterCat("");
-                        setCategoryPickerOpen(false);
-                      }}
-                    >
-                      Tous
-                    </button>
-                    {CATEGORIES.map((c) => (
-                      <button
-                        key={c.id}
-                        className={filterCat === c.id ? "chip active" : "chip"}
-                        onClick={() => {
-                          setFilterCat(c.id);
-                          setCategoryPickerOpen(false);
-                        }}
-                      >
-                        {c.emoji} {c.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
             <div className="chip-row">
               <button
                 type="button"
@@ -3138,6 +3217,12 @@ function EtalApp() {
             onOpenAdmin={() => setAdminPanelOpen(true)}
             reportsCount={reportedShopsCount}
             onDeleteAccount={deleteAccount}
+            profilePhoto={data.accounts?.[me]?.profilePhoto || ""}
+            onUpdateProfilePhoto={updateProfilePhoto}
+            faceIdSupported={faceIdSupported}
+            faceIdEnabled={faceIdRegisteredUsernames().includes(me)}
+            onEnableFaceId={() => handleEnableFaceId(me)}
+            onDisableFaceId={() => disableFaceId(me)}
             onLogout={() => {
               setMe(null);
               setTab("discover");
@@ -3738,8 +3823,10 @@ function ShopForm({ onCancel, onSubmit, title, initial }) {
                   <li>{p.alertsPerWeek === Infinity ? "Alertes illimitées" : `${p.alertsPerWeek} alerte/semaine`}</li>
                   <li>{p.gallery ? "Galerie photo" : "Pas de galerie"}</li>
                   <li>{p.loyalty ? "Fidélité + QR" : "Pas de fidélité"}</li>
-                  <li>{p.reviewReply ? "Réponse aux avis" : "Avis en lecture seule"}</li>
-                  {p.trending && <li>✨ Mise en avant Tendances</li>}
+                  <li>Réponse aux avis</li>
+                  {p.priorityPlacement && <li>📍 Placement prioritaire dans les résultats à proximité</li>}
+                  {p.targetedAlerts && <li>🎯 Alertes ciblées aux clients fidèles</li>}
+                  {p.multiShop && <li>🏬 Plusieurs commerces sur un seul compte</li>}
                 </ul>
               </button>
             ))}
@@ -3928,6 +4015,7 @@ function ShopForm({ onCancel, onSubmit, title, initial }) {
 
 function QRScanner({ onDetect, onClose }) {
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const [error, setError] = useState("");
   const [supported, setSupported] = useState(true);
 
@@ -3937,7 +4025,7 @@ function QRScanner({ onDetect, onClose }) {
     let stopped = false;
 
     async function start() {
-      if (typeof window === "undefined" || !("BarcodeDetector" in window)) {
+      if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setSupported(false);
         return;
       }
@@ -3951,14 +4039,31 @@ function QRScanner({ onDetect, onClose }) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
         }
-        const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+        // Safari/iPhone n'a pas l'API native BarcodeDetector : on utilise
+        // alors jsQR (décodage QR en JS pur, via un canvas caché) en secours.
+        const hasNativeDetector = typeof window !== "undefined" && "BarcodeDetector" in window;
+        const detector = hasNativeDetector ? new window.BarcodeDetector({ formats: ["qr_code"] }) : null;
+        const canvas = canvasRef.current;
+        const ctx = canvas ? canvas.getContext("2d", { willReadFrequently: true }) : null;
         const tick = async () => {
           if (stopped) return;
           try {
-            const codes = await detector.detect(videoRef.current);
-            if (codes && codes.length > 0) {
-              onDetect(codes[0].rawValue);
-              return;
+            if (detector) {
+              const codes = await detector.detect(videoRef.current);
+              if (codes && codes.length > 0) {
+                onDetect(codes[0].rawValue);
+                return;
+              }
+            } else if (typeof window.jsQR === "function" && ctx && videoRef.current && videoRef.current.videoWidth) {
+              canvas.width = videoRef.current.videoWidth;
+              canvas.height = videoRef.current.videoHeight;
+              ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+              const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+              const result = window.jsQR(frame.data, frame.width, frame.height);
+              if (result && result.data) {
+                onDetect(result.data);
+                return;
+              }
             }
           } catch (e) {
             /* single-frame detection failure, keep trying */
@@ -3990,14 +4095,15 @@ function QRScanner({ onDetect, onClose }) {
         </div>
         {!supported ? (
           <EmptyState
-            title="Scanner caméra indisponible dans cet aperçu."
-            sub="Ce navigateur ou cet aperçu ne permet pas la détection QR intégrée — utilisez le code en dessous à la place. Ça fonctionnera dans la vraie application."
+            title="Caméra indisponible sur cet appareil."
+            sub="Utilisez le code en dessous à la place."
           />
         ) : error ? (
           <EmptyState title={error} sub="Vous pouvez toujours saisir le code manuellement." />
         ) : (
           <video ref={videoRef} className="scanner-video" muted playsInline />
         )}
+        <canvas ref={canvasRef} style={{ display: "none" }} />
       </div>
     </div>
   );
@@ -4136,6 +4242,30 @@ function ManageShop({ shop, stats, posts, ratings, onBack, onUpdateShop, onPubli
         </div>
       </div>
 
+      {shop.reward && (
+        <button
+          type="button"
+          className="cta-btn scan-quick-btn"
+          onClick={() => {
+            setVisitResult(null);
+            setScannerOpen(true);
+          }}
+        >
+          📷 Scanner la carte de fidélité d'un client
+        </button>
+      )}
+      {scannerOpen && (
+        <QRScanner
+          onClose={() => setScannerOpen(false)}
+          onDetect={(rawValue) => {
+            const code = rawValue.replace(/^ETAL-/, "");
+            setScannerOpen(false);
+            setVisitCode(code);
+            setVisitResult(onValidateVisit(code));
+            setSection("fidelite");
+          }}
+        />
+      )}
       {(() => {
         const lastTs = posts.length > 0 ? Math.max(...posts.map((p) => p.createdAt)) : shop.createdAt || Date.now();
         const inactiveDays = Math.floor((Date.now() - lastTs) / (24 * 60 * 60 * 1000));
@@ -4442,9 +4572,9 @@ function ManageShop({ shop, stats, posts, ratings, onBack, onUpdateShop, onPubli
               <p className="preview-label">
                 Programme actif : {shop.reward} — objectif {shop.loyaltyGoal || 6} passages.
               </p>
-              <button className="cta-btn small" type="button" onClick={() => setScannerOpen(true)}>
-                📷 Scanner un QR
-              </button>
+              <p className="loyalty-hint">
+                Le scan rapide se trouve en haut de la page (bouton « 📷 Scanner la carte de fidélité d'un client »).
+              </p>
               <label>
                 Ou code du client (indiqué sous son QR code)
                 <input
@@ -4463,17 +4593,6 @@ function ManageShop({ shop, stats, posts, ratings, onBack, onUpdateShop, onPubli
                 <p className={visitResult.ok ? "loyalty-hint success" : "loyalty-hint error"}>
                   {visitResult.message}
                 </p>
-              )}
-              {scannerOpen && (
-                <QRScanner
-                  onClose={() => setScannerOpen(false)}
-                  onDetect={(rawValue) => {
-                    const code = rawValue.replace(/^ETAL-/, "");
-                    setScannerOpen(false);
-                    setVisitCode(code);
-                    setVisitResult(onValidateVisit(code));
-                  }}
-                />
               )}
             </>
           ) : (
@@ -4724,17 +4843,47 @@ function AdminPanel({ shops, accountUsernames, accountsCount, postsCount, report
   );
 }
 
-function ProfileScreen({ me, loyaltyCards, loyaltyData, followedShops, ratedShops, ratings, onOpenShop, visitHistory, mutedData, onSetMuteLevel, isDark, onToggleDarkMode, isAdmin, onUnlockAdmin, onOpenAdmin, reportsCount, onDeleteAccount, onLogout }) {
+function ProfileScreen({ me, loyaltyCards, loyaltyData, followedShops, ratedShops, ratings, onOpenShop, visitHistory, mutedData, onSetMuteLevel, isDark, onToggleDarkMode, isAdmin, onUnlockAdmin, onOpenAdmin, reportsCount, onDeleteAccount, onLogout, profilePhoto, onUpdateProfilePhoto, faceIdSupported, faceIdEnabled, onEnableFaceId, onDisableFaceId }) {
   const [adminKeyInput, setAdminKeyInput] = useState("");
   const [adminMsg, setAdminMsg] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
+  const [faceIdMsg, setFaceIdMsg] = useState("");
+  const [faceIdOn, setFaceIdOn] = useState(faceIdEnabled);
+  const [photoLoading, setPhotoLoading] = useState(false);
+
+  async function handlePhotoChange(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setPhotoLoading(true);
+    try {
+      const dataUrl = await resizeImageFile(file, 400, 0.8);
+      onUpdateProfilePhoto(dataUrl);
+    } catch (err) {
+      /* ignore */
+    }
+    setPhotoLoading(false);
+  }
+
   return (
     <div>
       <div className="profile-head">
-        <div className="shop-mark large" style={{ background: "linear-gradient(135deg, var(--indigo), var(--indigo-deep))" }}>
-          {me.slice(0, 1).toUpperCase()}
-        </div>
+        <label className="profile-photo-wrap" title="Changer la photo de profil">
+          {profilePhoto ? (
+            <img className="profile-photo" src={profilePhoto} alt={me} />
+          ) : (
+            <div className="shop-mark large" style={{ background: "linear-gradient(135deg, var(--indigo), var(--indigo-deep))" }}>
+              {me.slice(0, 1).toUpperCase()}
+            </div>
+          )}
+          <span className="profile-photo-edit">{photoLoading ? "…" : "📷"}</span>
+          <input type="file" accept="image/*" onChange={handlePhotoChange} style={{ display: "none" }} />
+        </label>
+        {profilePhoto && (
+          <button type="button" className="ghost-link" onClick={() => onUpdateProfilePhoto("")}>
+            Retirer la photo
+          </button>
+        )}
         <h1>{me}</h1>
         <button
           type="button"
@@ -4790,6 +4939,26 @@ function ProfileScreen({ me, loyaltyCards, loyaltyData, followedShops, ratedShop
                 </div>
               ) : null}
               {adminMsg && <p className="loyalty-hint">{adminMsg}</p>}
+              {faceIdSupported && (
+                <button
+                  className="settings-row"
+                  onClick={async () => {
+                    setFaceIdMsg("");
+                    if (faceIdOn) {
+                      onDisableFaceId();
+                      setFaceIdOn(false);
+                      setFaceIdMsg("Face ID / Touch ID désactivé sur cet appareil.");
+                    } else {
+                      const res = await onEnableFaceId();
+                      if (res && res.ok) setFaceIdOn(true);
+                      setFaceIdMsg(res && res.message ? res.message : "");
+                    }
+                  }}
+                >
+                  🔓 {faceIdOn ? "Désactiver Face ID / Touch ID" : "Activer Face ID / Touch ID sur cet appareil"}
+                </button>
+              )}
+              {faceIdMsg && <p className="loyalty-hint">{faceIdMsg}</p>}
               <button className="settings-row" onClick={onLogout}>
                 🔁 Changer de compte
               </button>
@@ -5162,7 +5331,7 @@ function ForgotPasswordScreen({ onBack, onReset }) {
   );
 }
 
-function LoginScreen({ pseudoInput, setPseudoInput, passwordInput, setPasswordInput, confirmPasswordInput, setConfirmPasswordInput, recoveryEmailInput, setRecoveryEmailInput, firstNameInput, setFirstNameInput, lastNameInput, setLastNameInput, phoneInput, setPhoneInput, authMode, setAuthMode, onSubmit, shopCount, loginError, onForgotPassword }) {
+function LoginScreen({ pseudoInput, setPseudoInput, passwordInput, setPasswordInput, confirmPasswordInput, setConfirmPasswordInput, recoveryEmailInput, setRecoveryEmailInput, firstNameInput, setFirstNameInput, lastNameInput, setLastNameInput, phoneInput, setPhoneInput, authMode, setAuthMode, onSubmit, shopCount, loginError, onForgotPassword, faceIdSupported, faceIdUsers, faceIdError, onFaceIdLogin }) {
   const isSignup = authMode === "signup";
   return (
     <div className="login-screen">
@@ -5196,6 +5365,22 @@ function LoginScreen({ pseudoInput, setPseudoInput, passwordInput, setPasswordIn
             <span>Posez vos questions directement, avec des réponses immédiates</span>
           </li>
         </ul>
+        {!isSignup && faceIdSupported && faceIdUsers && faceIdUsers.length > 0 && (
+          <div className="faceid-block">
+            {faceIdUsers.map((u) => (
+              <button
+                key={u}
+                type="button"
+                className="cta-btn faceid-btn"
+                onClick={() => onFaceIdLogin(u)}
+              >
+                🔓 Se connecter avec Face ID / Touch ID ({u})
+              </button>
+            ))}
+            {faceIdError && <p className="field-error">{faceIdError}</p>}
+            <p className="footnote" style={{ margin: "8px 0 16px" }}>— ou avec ton mot de passe —</p>
+          </div>
+        )}
         <form className="login-form" onSubmit={onSubmit}>
           <label htmlFor="pseudo">Votre nom ou pseudo</label>
           <input
@@ -5637,6 +5822,7 @@ function Shell({ children, dark }) {
         .shop-header h1 { font-family: 'Baloo 2', sans-serif; font-size: 22px; font-weight: 700; margin: 0 0 2px; }
         .shop-header .shop-city { color: rgba(255,255,255,0.85); }
         .shop-header-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+        .scan-quick-btn { display: block; width: calc(100% - 40px); margin: 4px 20px 14px; background: linear-gradient(135deg, var(--indigo), var(--coral)); }
         .looking { font-size: 14px; color: var(--ink-soft); line-height: 1.55; padding: 0 20px; }
         .section-title { font-family: 'Baloo 2', sans-serif; font-size: 17px; font-weight: 700; padding: 22px 20px 8px; margin: 0; }
 
@@ -5669,6 +5855,8 @@ function Shell({ children, dark }) {
         .mode-btn { flex: 1; border: none; background: none; font-size: 13px; font-weight: 600; color: var(--ink-soft); padding: 8px 10px; border-radius: 999px; cursor: pointer; }
         .mode-btn.active { background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
         .field-error { color: var(--coral); font-size: 12px; font-weight: 600; }
+        .faceid-block { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+        .faceid-btn { background: linear-gradient(135deg, var(--indigo), var(--coral)); }
         .hours-editor { display: flex; flex-direction: column; gap: 10px; }
         .hours-day-block { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
         .hours-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
@@ -5708,6 +5896,13 @@ function Shell({ children, dark }) {
 
         .profile-head { display: flex; align-items: center; gap: 14px; padding: 8px 20px 4px; }
         .profile-head h1 { font-family: 'Baloo 2', sans-serif; font-size: 22px; font-weight: 700; margin: 0; flex: 1; }
+        .profile-photo-wrap { position: relative; width: 60px; height: 60px; flex: none; cursor: pointer; display: block; }
+        .profile-photo { width: 60px; height: 60px; border-radius: 18px; object-fit: cover; display: block; }
+        .profile-photo-edit {
+          position: absolute; bottom: -4px; right: -4px; width: 24px; height: 24px; border-radius: 50%;
+          background: var(--card); box-shadow: var(--shadow); display: flex; align-items: center; justify-content: center;
+          font-size: 12px; border: 2px solid var(--card);
+        }
         .settings-gear { font-size: 18px; }
         .settings-menu { display: flex; flex-direction: column; gap: 8px; }
         .settings-row {
@@ -5827,8 +6022,7 @@ function Shell({ children, dark }) {
 }
 
 
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(<EtalApp />);
+ReactDOM.createRoot(document.getElementById("root")).render(<EtalApp />);
 </script>
 </body>
 </html>
