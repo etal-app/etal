@@ -1947,6 +1947,31 @@ function EtalApp() {
   const [userLocation, setUserLocation] = useState(null);
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState("");
+  const [citySuggestions, setCitySuggestions] = useState([]);
+  const [showCitySuggestions, setShowCitySuggestions] = useState(false);
+  const citySuggestTimer = useRef(null);
+
+  // Suggestions de ville en direct pendant la frappe dans la recherche.
+  useEffect(() => {
+    const q = filterCity.trim();
+    if (userLocation || q.length < 2) {
+      setCitySuggestions([]);
+      return;
+    }
+    if (citySuggestTimer.current) clearTimeout(citySuggestTimer.current);
+    citySuggestTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=fr&q=${encodeURIComponent(q)}`
+        );
+        const json = await res.json();
+        setCitySuggestions(json || []);
+      } catch (e) {
+        setCitySuggestions([]);
+      }
+    }, 350);
+    return () => clearTimeout(citySuggestTimer.current);
+  }, [filterCity, userLocation]);
   const [selectedShop, setSelectedShop] = useState(null);
   const [managingShop, setManagingShop] = useState(null);
   const [creatingShop, setCreatingShop] = useState(false);
@@ -2977,6 +3002,14 @@ function EtalApp() {
               </div>
             )}
             <div className="emoji-quickpicks">
+              <button
+                type="button"
+                className={!filterCat ? "emoji-pick active" : "emoji-pick"}
+                title="Tous les commerces à proximité"
+                onClick={() => setFilterCat("")}
+              >
+                🏙️
+              </button>
               {CATEGORIES.map((c) => (
                 <button
                   key={c.id}
@@ -2995,22 +3028,47 @@ function EtalApp() {
               ))}
             </div>
             <div className="search-bar-row">
-              <input
-                ref={searchInputRef}
-                className="pill-input search-bar-input"
-                placeholder="🔍  Ville / métier"
-                value={filterCity}
-                onChange={(e) => {
-                  setFilterCity(e.target.value);
-                  setUserLocation(null);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    searchCityLocation();
-                  }
-                }}
-              />
+              <div className="search-input-wrap">
+                <input
+                  ref={searchInputRef}
+                  className="pill-input search-bar-input"
+                  placeholder="🔍  Ville / métier"
+                  value={filterCity}
+                  onChange={(e) => {
+                    setFilterCity(e.target.value);
+                    setUserLocation(null);
+                    setShowCitySuggestions(true);
+                  }}
+                  onFocus={() => setShowCitySuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowCitySuggestions(false), 150)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      searchCityLocation();
+                      setShowCitySuggestions(false);
+                    }
+                  }}
+                />
+                {showCitySuggestions && citySuggestions.length > 0 && (
+                  <ul className="city-suggestions discover-city-suggestions">
+                    {citySuggestions.map((s, i) => (
+                      <li
+                        key={i}
+                        onMouseDown={() => {
+                          const shortName = s.display_name.split(",")[0];
+                          setFilterCity(shortName);
+                          setUserLocation({ lat: parseFloat(s.lat), lng: parseFloat(s.lon) });
+                          setSortMode("distance");
+                          setCitySuggestions([]);
+                          setShowCitySuggestions(false);
+                        }}
+                      >
+                        {s.display_name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
               <button
                 type="button"
                 className="icon-btn geoloc-btn"
@@ -5938,6 +5996,9 @@ function Shell({ children, dark }) {
         .welcome-back .hero-tagline { margin-top: 4px; }
 
         .city-autocomplete { position: relative; }
+        .search-input-wrap { position: relative; flex: 1; }
+        .search-input-wrap .search-bar-input { margin-bottom: 0; width: 100%; }
+        .discover-city-suggestions { max-height: 220px; overflow-y: auto; }
         .city-input-row { display: flex; gap: 8px; }
         .city-input-row input { flex: 1; }
         .city-suggestions {
@@ -6071,8 +6132,8 @@ function Shell({ children, dark }) {
         .photo-card .stars .star.filled { color: var(--amber); }
         .photo-card .shop-mark { box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
         .shop-mark {
-          width: 52px; height: 52px; flex: none; display: flex; align-items: center; justify-content: center;
-          font-size: 24px; border-radius: 15px; color: #fff;
+          width: 58px; height: 58px; flex: none; display: flex; align-items: center; justify-content: center;
+          font-size: 27px; border-radius: 16px; color: #fff;
         }
         .shop-mark.large { width: 60px; height: 60px; font-size: 30px; border-radius: 18px; background: rgba(255,255,255,0.25); }
         .shop-row-body { flex: 1; min-width: 0; }
