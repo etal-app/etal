@@ -8,7 +8,7 @@ Mis à jour à chaque envoi.
 - Vraie base de données persistante (Supabase)
 - Hébergement réel en ligne (GitHub + Vercel) — https://etal-tau.vercel.app
 - Logo monogramme "É" (sans l'accent toit)
-- Comptes de démo auto-créés si base vide
+- Comptes de démo auto-créés si base vide (voir identifiants ci-dessous)
 - Face ID / Touch ID (connexion rapide, propre à chaque appareil)
 - Photo de profil utilisateur (remplace la lettre-avatar si ajoutée)
 - Nouvelle grille tarifaire :
@@ -24,9 +24,22 @@ Mis à jour à chaque envoi.
 - Scan QR réparé pour Safari/iPhone (ajout d'un décodeur de secours jsQR, en plus de
   l'API native utilisée sur Chrome/Android)
 - Suppression du menu de filtre catégorie redondant sur l'écran découverte
+- Catégories (emojis) déplacées au-dessus de la barre de recherche ; géolocalisation
+  juste à côté de la barre
+- Vraie carte interactive (Leaflet/OpenStreetMap) : zoom, déplacement tactile,
+  épingles aux vraies coordonnées des commerces
+- Réglages du profil : changer d'identifiant (avec migration de tout l'historique),
+  modifier le mot de passe, arrêter son abonnement (repasse le commerce en Gratuit)
 
 ## 🔜 À faire (pas urgent, dans l'ordre discuté)
 
+- 💳 **Vrais paiements (Stripe)** — aujourd'hui le choix Pro/Premium à la création
+  d'un commerce est juste une case cochée manuellement, personne n'est débité.
+  Pour un vrai abonnement payant : brancher Stripe (carte enregistrée, prélèvement
+  automatique mensuel, ~1,5%+0,25€ de commission par transaction, pas d'abonnement
+  fixe), avec soit un bouton d'annulation qui appelle Stripe, soit une redirection
+  vers le "portail client" Stripe. Stripe préviendrait l'appli automatiquement
+  (webhook) pour remettre le commerce en Gratuit à la résiliation.
 - 🎯 Alertes ciblées aux clients fidèles (Premium) — vraie fonctionnalité à coder
   (UI + logique), pour l'instant juste listée dans la fiche tarifs
 - 🏬 Plusieurs commerces sur un seul compte (Premium) — vraie fonctionnalité à coder,
@@ -41,10 +54,18 @@ Mis à jour à chaque envoi.
   (nécessite un compte Apple Developer à 99$/an + un petit service de signature ;
   à reconsidérer une fois que l'appli a de vrais utilisateurs actifs)
 
+## Comptes de démonstration
+
+- `test` / `test1234` — Boucherie Test
+- `quentin` / `test1234` — Boulangerie Quentin
+- `administration` / `admin1234` — compte administrateur
+- Clé admin de secours (si besoin de redébloquer) : `ETAL-ADMIN-2026`
+
 ## Notes techniques utiles
 
 - Le code source de travail est `etal.jsx`. Le fichier réellement déployé est
-  `index.html` (React + Babel chargés depuis cdnjs, `etal.jsx` collé dedans).
+  `index.html` (React + Babel + jsQR + Leaflet chargés depuis cdnjs, `etal.jsx`
+  collé dedans).
 - Persistance : Supabase, table `app_state` (une seule ligne JSON pour l'instant).
 - Le dépôt GitHub (`github.com/etal-app/etal`) contient `index.html` à la racine ;
   Vercel redéploie automatiquement à chaque mise à jour de ce fichier.

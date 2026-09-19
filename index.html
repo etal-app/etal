@@ -3289,6 +3289,7 @@ function EtalApp() {
             customers={Object.entries(data.loyalty[managingShop] || {})
               .map(([username, entry]) => ({
                 username,
+                profilePhoto: data.accounts?.[username]?.profilePhoto || "",
                 stamps: entry.stamps || 0,
                 redeemed: entry.redeemed || 0,
                 visits: entry.visits || [],
@@ -4496,9 +4497,13 @@ function ManageShop({ shop, stats, posts, ratings, onBack, onUpdateShop, onPubli
                 const tier = customerTier(c.totalVisits);
                 return (
                   <li key={c.username} className="shop-card" style={{ cursor: "default" }}>
-                    <div className="shop-mark" style={{ background: "var(--indigo)" }}>
-                      {c.username.slice(0, 1).toUpperCase()}
-                    </div>
+                    {c.profilePhoto ? (
+                      <img className="shop-mark customer-photo" src={c.profilePhoto} alt={c.username} />
+                    ) : (
+                      <div className="shop-mark" style={{ background: "var(--indigo)" }}>
+                        {c.username.slice(0, 1).toUpperCase()}
+                      </div>
+                    )}
                     <div className="shop-row-body">
                       <div className="shop-row-head">
                         <span className="shop-name">{c.username}</span>
@@ -6176,6 +6181,7 @@ function Shell({ children, dark }) {
         .profile-head h1 { font-family: 'Baloo 2', sans-serif; font-size: 22px; font-weight: 700; margin: 0; flex: 1; }
         .profile-photo-wrap { position: relative; width: 60px; height: 60px; flex: none; cursor: pointer; display: block; }
         .profile-photo { width: 60px; height: 60px; border-radius: 18px; object-fit: cover; display: block; }
+        .customer-photo { object-fit: cover; }
         .profile-photo-edit {
           position: absolute; bottom: -4px; right: -4px; width: 24px; height: 24px; border-radius: 50%;
           background: var(--card); box-shadow: var(--shadow); display: flex; align-items: center; justify-content: center;
